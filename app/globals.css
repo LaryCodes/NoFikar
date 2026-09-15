@@ -2,32 +2,209 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 214, 219, 220;
-  --background-end-rgb: 255, 255, 255;
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-start-rgb: 0, 0, 0;
-    --background-end-rgb: 0, 0, 0;
+    --background: 42 47% 98%;
+    --foreground: 150 10% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 150 10% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 150 10% 15%;
+    --primary: 152 57% 45%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 142 23% 88%;
+    --secondary-foreground: 150 10% 15%;
+    --muted: 142 20% 95%;
+    --muted-foreground: 150 8% 45%;
+    --accent: 148 35% 92%;
+    --accent-foreground: 150 10% 15%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 142 20% 90%;
+    --input: 142 20% 88%;
+    --ring: 152 57% 45%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 150 15% 10%;
+    --foreground: 142 20% 95%;
+    --card: 150 12% 13%;
+    --card-foreground: 142 20% 95%;
+    --popover: 150 12% 13%;
+    --popover-foreground: 142 20% 95%;
+    --primary: 152 50% 50%;
+    --primary-foreground: 150 15% 10%;
+    --secondary: 150 10% 20%;
+    --secondary-foreground: 142 20% 95%;
+    --muted: 150 10% 18%;
+    --muted-foreground: 142 15% 60%;
+    --accent: 150 12% 22%;
+    --accent-foreground: 142 20% 95%;
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 142 20% 95%;
+    --border: 150 10% 20%;
+    --input: 150 10% 20%;
+    --ring: 152 50% 50%;
   }
 }
 
-body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
 }
 
+/* Mobile-first utilities */
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  
+  .safe-left {
+    padding-left: env(safe-area-inset-left);
+  }
+  
+  .safe-right {
+    padding-right: env(safe-area-inset-right);
+  }
+  
+  .glass {
+    @apply bg-background/80 backdrop-blur-xl border border-border/50;
+  }
+  
+  .glass-strong {
+    @apply bg-background/95 backdrop-blur-2xl border border-border;
   }
 }
+
+/* --- Leaflet ------------------------------------------------------------ */
+/* Marker divIcons are injected as raw HTML by Leaflet, so their animation
+   has to live in a real stylesheet rather than an inline <style> tag. */
+.nofikar-marker {
+  background: transparent;
+  border: 0;
+}
+
+.nofikar-pulse {
+  position: absolute;
+  inset: -6px;
+  border-radius: 9999px;
+  border: 2px solid currentColor;
+  opacity: 0.75;
+  animation: nofikar-pulse 2s ease-out infinite;
+}
+
+@keyframes nofikar-pulse {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.75;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nofikar-pulse {
+    animation: none;
+  }
+}
+
+/* --- Dialog / bottom sheet --------------------------------------------- */
+/* Defined here rather than pulling in tailwindcss-animate for two keyframes. */
+.nofikar-overlay[data-state="open"] {
+  animation: nofikar-fade-in 150ms ease-out;
+}
+.nofikar-overlay[data-state="closed"] {
+  animation: nofikar-fade-out 150ms ease-in;
+}
+
+.nofikar-sheet[data-state="open"] {
+  animation: nofikar-slide-up 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.nofikar-sheet[data-state="closed"] {
+  animation: nofikar-slide-down 180ms ease-in;
+}
+
+@keyframes nofikar-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes nofikar-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes nofikar-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes nofikar-slide-down {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+
+/* Desktop: the sheet is centered via -translate-x/y, so sliding would fight
+   the transform. Fade instead. */
+@media (min-width: 640px) {
+  .nofikar-sheet[data-state="open"] {
+    animation: nofikar-fade-in 150ms ease-out;
+  }
+  .nofikar-sheet[data-state="closed"] {
+    animation: nofikar-fade-out 120ms ease-in;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nofikar-overlay[data-state],
+  .nofikar-sheet[data-state] {
+    animation: none;
+  }
+}
+
+/* Keep Leaflet chrome readable in dark mode and small on mobile. */
+.leaflet-container {
+  font: inherit;
+  background: hsl(var(--muted));
+}
+
+.leaflet-control-attribution {
+  font-size: 10px !important;
+  background: hsl(var(--background) / 0.75) !important;
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.leaflet-control-attribution a {
+  color: hsl(var(--primary)) !important;
+}
+
+.leaflet-bar a {
+  background: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+.leaflet-bar a:hover {
+  background: hsl(var(--accent)) !important;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: hsl(var(--popover)) !important;
+  color: hsl(var(--popover-foreground)) !important;
+}
+
+.dark .leaflet-tile-pane {
+  /* OSM raster tiles have no dark variant; soften them instead of shipping
+     a blinding white map in dark mode. */
+  filter: brightness(0.75) saturate(0.85);
+}
+

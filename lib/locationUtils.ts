@@ -77,3 +77,22 @@ export function getTimeAgo(timestamp: string): string {
   if (diff < 7200) return '1 hour ago';
   return `${Math.floor(diff / 3600)} hours ago`;
 }
+
+/**
+ * Battery level 0-100, or null when the Battery Status API is unavailable.
+ * Chromium-only in practice (Safari and Firefox do not implement it), so every
+ * caller must treat null as "unknown" rather than showing a fake value.
+ */
+export async function readBatteryLevel(): Promise<number | null> {
+  try {
+    const nav = navigator as Navigator & {
+      getBattery?: () => Promise<{ level: number }>;
+    };
+    if (typeof nav.getBattery !== 'function') return null;
+    const battery = await nav.getBattery();
+    return Math.round(battery.level * 100);
+  } catch {
+    // Unsupported or blocked by permissions policy — battery is optional.
+    return null;
+  }
+}
