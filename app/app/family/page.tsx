@@ -78,9 +78,25 @@ export default function FamilyPage() {
   const [confirm, setConfirm] = useState<ConfirmAction>(null);
   const [busy, setBusy] = useState(false);
 
+  const [sosUserIds, setSosUserIds] = useState<string[]>([]);
+
   const myRole = members.find((m) => m.user_id === user?.id)?.role;
   const isAdmin = myRole === "admin";
   const adminCount = members.filter((m) => m.role === "admin").length;
+
+  // Presence needs a recent fix as well as the stored flag, so a phone that
+  // lost signal is not counted as live.
+  const onlineCount = members.filter(
+    (m) =>
+      presenceFor({
+        sharingEnabled: m.profiles?.location_sharing_enabled,
+        lastFixAt: m.latest?.created_at ?? null,
+      }) === "live"
+  ).length;
+
+  const sosMembers = members
+    .filter((m) => sosUserIds.includes(m.user_id))
+    .map((m) => m.profiles?.name || m.name);
 
   const load = useCallback(async () => {
     if (!currentFamily) return;
@@ -121,6 +137,15 @@ export default function FamilyPage() {
     }
 
     setMembers(rows.map((r) => ({ ...r, latest: newest.get(r.user_id) ?? null })));
+
+    const { data: sosRows } = await supabase
+      .from("emergency_sessions")
+      .select("requester_id")
+      .eq("family_id", currentFamily.id)
+      .eq("session_type", "sos")
+      .eq("status", "active");
+
+    setSosUserIds((sosRows ?? []).map((r) => r.requester_id as string));
     setError(null);
   }, [currentFamily]);
 
@@ -307,6 +332,30 @@ export default function FamilyPage() {
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
               <p className="text-sm text-destructive">{error}</p>
             </div>
+          </Card>
+        )}
+
+        {/* Family safety status — a one-glance answer to "is everyone OK?" */}
+        {!loading && members.length > 0 && (
+          <Card className="p-4">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              <span className="font-semibold">
+                {members.length} family {members.length === 1 ? "member" : "members"}
+              </span>
+              <span className="flex items-center gap-1.5 text-primary">
+                <span className="h-2 w-2 rounded-full bg-primary" />
+                {onlineCount} sharing live
+              </span>
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <span className="h-2 w-2 rounded-full bg-muted-foreground/50" />
+                {members.length - onlineCount} not sharing
+              </span>
+            </div>
+            {sosMembers.length > 0 && (
+              <p className="mt-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive">
+                🚨 Active SOS: {sosMembers.join(", ")}
+              </p>
+            )}
           </Card>
         )}
 

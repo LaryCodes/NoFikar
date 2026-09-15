@@ -1,4 +1,5 @@
-import { supabase } from "@/lib/supabase";
+import { enqueueEvent } from "@/lib/queue";
+import { runSync } from "@/lib/sync";
 
 /**
  * Every alert type the app can emit. Keeping this a union (rather than free
@@ -37,12 +38,25 @@ export interface CreateAlertInput {
   title: string;
   message?: string;
   data?: Record<string, unknown>;
+  /**
+   * When the thing being reported actually happened. Defaults to now. Pass the
+   * original moment for anything detected offline — a safe-zone crossing in a
+   * tunnel must not be timestamped when the network came back.
+   */
+  recordedAt?: string;
 }
 
 /**
- * Writes an alert. Never throws: an alert is a side-effect of some other
- * action (a GPS ping, a button press) and must not fail that action. Callers
- * that care can inspect the returned error.
+ * Writes an alert through the offline queue rather than straight to Supabase.
+ *
+ * Two reasons:
+ *   1. A safe-zone crossing or an SOS raised with no connectivity is still a
+ *      real safety event, and must reach the family once the network returns.
+ *   2. The queue's client-generated id makes replay idempotent, so a retry
+ *      cannot produce duplicate alerts.
+ *
+ * Never throws: an alert is a side-effect of some other action (a GPS ping, a
+ * button press) and must not be able to fail that action.
  */
 export async function createAlert({
   familyId,
@@ -51,20 +65,29 @@ export async function createAlert({
   title,
   message,
   data,
-}: CreateAlertInput): Promise<{ error: Error | null }> {
+  recordedAt,
+}: CreateAlertInput): Promise<{ error: Error | null; queued: boolean }> {
   try {
-    const { error } = await supabase.from("alerts").insert({
-      family_id: familyId,
-      user_id: userId,
-      type,
-      title,
-      message: message ?? null,
-      data: data ? { ...data, at: new Date().toISOString() } : null,
+    await enqueueEvent({
+      userId,
+      familyId,
+      kind: "alert",
+      recordedAt,
+      offline: typeof navigator !== "undefined" && !navigator.onLine,
+      payload: {
+        type,
+        title,
+        message: message ?? null,
+        data: data ?? null,
+      },
     });
-    if (error) throw error;
-    return { error: null };
+
+    const offline = typeof navigator !== "undefined" && !navigator.onLine;
+    if (!offline) void runSync();
+
+    return { error: null, queued: offline };
   } catch (err) {
-    console.error(`Failed to create "${type}" alert:`, err);
-    return { error: err as Error };
+    console.error(`Failed to queue "${type}" alert:`, err);
+    return { error: err as Error, queued: false };
   }
 }

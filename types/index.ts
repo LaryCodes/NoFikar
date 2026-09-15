@@ -108,6 +108,15 @@ export interface SosContext {
   speed?: number;
   online?: boolean;
   triggered_at?: string;
+  /**
+   * True when no fresh fix was available and the stored last-known position was
+   * attached instead. The family UI must label this as last-known, never live.
+   */
+  is_last_known?: boolean;
+  /** Age of the attached position at the moment the SOS was raised. */
+  fix_age_ms?: number;
+  /** Recorded time of the attached position. */
+  fix_at?: string;
 }
 
 export interface EmergencySession {

@@ -50,7 +50,7 @@ function getPosition(): Promise<GeolocationPosition | null> {
 }
 
 export default function SafetyPage() {
-  const { currentFamily, user } = useAppStore();
+  const { currentFamily, user, localSos, setLocalSos } = useAppStore();
 
   const [zones, setZones] = useState<SafeZone[]>([]);
   const [contacts, setContacts] = useState<EmergencyContact[]>([]);
@@ -251,23 +251,37 @@ export default function SafetyPage() {
     setSosBusy(true);
     setError(null);
     try {
-      const { error: err } = await triggerSos({
+      const { session, queued, error: err } = await triggerSos({
         familyId: currentFamily.id,
         userId: user.id,
         userName,
       });
 
-      if (err) {
-        setError(err.message || "Could not send the SOS. Try again.");
+      if (err || !session) {
+        setError(err?.message || "Could not raise the SOS. Try again.");
         return;
       }
 
+      // Held locally so the emergency banner appears instantly and survives a
+      // reload, even when the row has not reached Supabase yet.
+      setLocalSos({
+        id: session.id,
+        familyId: currentFamily.id,
+        createdAt: session.created_at,
+        data: session.data ?? {},
+        queued,
+      });
+
       setSosActive(true);
-      setNotice("SOS sent. Your family has been notified.");
+      setNotice(
+        queued
+          ? "SOS recorded on this device. Your family will be alerted the moment you reconnect."
+          : "SOS sent. Your family has been notified."
+      );
     } finally {
       setSosBusy(false);
     }
-  }, [user, currentFamily, userName]);
+  }, [user, currentFamily, userName, setLocalSos]);
 
   // Countdown tick. Cancelling simply clears the state, so nothing is sent.
   useEffect(() => {
@@ -290,6 +304,9 @@ export default function SafetyPage() {
     setError(null);
     setSosCountdown(SOS_COUNTDOWN_SECONDS);
   };
+
+  // An SOS raised offline has no server row yet, so local state counts too.
+  const emergencyActive = sosActive || localSos !== null;
 
   const handleQuickAction = async (kind: "safe" | "help") => {
     setActionBusy(kind);
@@ -382,15 +399,15 @@ export default function SafetyPage() {
         <Card className="p-6 text-center">
           <h2 className="mb-1 text-xl font-semibold">Emergency SOS</h2>
           <p className="mb-5 text-sm text-muted-foreground">
-            {sosActive
+            {emergencyActive
               ? "An SOS is active. Use the banner above to confirm you are safe."
-              : `Alerts everyone in ${currentFamily?.name ?? "your family"} with your location, battery, and activity`}
+              : `Alerts everyone in ${currentFamily?.name ?? "your family"} with your location, battery, and activity. Works offline — it syncs when you reconnect.`}
           </p>
 
           <button
             type="button"
             onClick={armSos}
-            disabled={sosBusy || !user || sosActive || sosCountdown !== null}
+            disabled={sosBusy || !user || emergencyActive || sosCountdown !== null}
             aria-label="Send emergency SOS alert to family"
             className="mx-auto flex h-32 w-32 items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-red-700 text-white shadow-2xl shadow-red-500/40 transition-transform active:scale-95 disabled:opacity-60"
           >
@@ -399,10 +416,10 @@ export default function SafetyPage() {
             ) : (
               <span>
                 <span className="block text-3xl" aria-hidden="true">
-                  {sosActive ? "🚨" : "🆘"}
+                  {emergencyActive ? "🚨" : "🆘"}
                 </span>
                 <span className="mt-1 block text-sm font-bold">
-                  {sosActive ? "ACTIVE" : "SOS"}
+                  {emergencyActive ? "ACTIVE" : "SOS"}
                 </span>
               </span>
             )}

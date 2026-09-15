@@ -498,6 +498,41 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_emergency_sessions_family_status
   ON emergency_sessions(family_id, status);
 
+-- ---------------------------------------------------------------------------
+-- Offline-first location capture.
+--
+-- GPS hardware does not need the network, so points are captured into an
+-- IndexedDB queue on the device and upserted later. That means:
+--
+--   * `id` is generated on the CLIENT at capture time, not by the database.
+--     Re-running a sync therefore cannot duplicate a point: the queue upserts
+--     with ON CONFLICT DO NOTHING (Prefer: resolution=ignore-duplicates), which
+--     needs only INSERT privilege, so no UPDATE policy is added here.
+--   * `created_at` is the moment the fix was RECORDED, which may be well before
+--     it reached the server. `synced_at` records arrival, and the gap between
+--     the two is what lets the map label a recovered offline route honestly.
+--   * `captured_offline` marks points that were taken with no connectivity, so
+--     a reconstructed route can be drawn distinctly from a live one.
+--
+-- heading/altitude are recorded when the device reports them and left NULL
+-- otherwise; nothing is interpolated.
+-- ---------------------------------------------------------------------------
+ALTER TABLE location_history ADD COLUMN IF NOT EXISTS heading DOUBLE PRECISION;
+ALTER TABLE location_history ADD COLUMN IF NOT EXISTS altitude DOUBLE PRECISION;
+ALTER TABLE location_history
+  ADD COLUMN IF NOT EXISTS captured_offline BOOLEAN DEFAULT false;
+ALTER TABLE location_history ADD COLUMN IF NOT EXISTS synced_at TIMESTAMP WITH TIME ZONE;
+
+-- The timeline and route playback always query "this family, this member,
+-- ordered by capture time", which this index serves directly.
+CREATE INDEX IF NOT EXISTS idx_location_history_family_user_time
+  ON location_history(family_id, user_id, created_at DESC);
+
+-- Alerts are also queued offline and replayed with a client-generated id, for
+-- the same idempotency reason as locations.
+CREATE INDEX IF NOT EXISTS idx_alerts_family_created
+  ON alerts(family_id, created_at DESC);
+
 -- Safe zone states: users own their own geofence state; family can read it
 DROP POLICY IF EXISTS "Users can manage own zone state" ON safe_zone_states;
 CREATE POLICY "Users can manage own zone state" ON safe_zone_states

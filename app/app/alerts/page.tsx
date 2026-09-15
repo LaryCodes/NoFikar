@@ -1,25 +1,44 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/lib/store";
+import { useLocationSharing } from "@/lib/locationSharing";
 import { ALERT_META, type AlertType } from "@/lib/alerts";
 import { getTimeAgo } from "@/lib/locationUtils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton";
 import PullToRefresh from "@/components/PullToRefresh";
-import { Bell, Clock, AlertCircle, CheckCheck } from "lucide-react";
+import {
+  Bell,
+  Clock,
+  AlertCircle,
+  CheckCheck,
+  MapPin,
+  Navigation,
+  UploadCloud,
+} from "lucide-react";
 
 interface AlertRow {
   id: string;
   type: string;
   title: string;
   message: string | null;
+  data: Record<string, unknown> | null;
   read: boolean;
   created_at: string;
   user_id: string | null;
   profiles: { name: string | null; avatar_url: string | null } | null;
+}
+
+/** Coordinates are only present on alerts that actually captured a position. */
+function coordsOf(alert: AlertRow): { lat: number; lng: number } | null {
+  const lat = alert.data?.latitude;
+  const lng = alert.data?.longitude;
+  if (typeof lat !== "number" || typeof lng !== "number") return null;
+  return { lat, lng };
 }
 
 const FILTERS = [
@@ -31,7 +50,9 @@ const FILTERS = [
 type FilterKey = (typeof FILTERS)[number]["key"];
 
 export default function AlertsPage() {
-  const { currentFamily } = useAppStore();
+  const router = useRouter();
+  const { currentFamily, focusOnMember } = useAppStore();
+  const { pendingEvents } = useLocationSharing();
 
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,7 +65,9 @@ export default function AlertsPage() {
 
     const { data, error: err } = await supabase
       .from("alerts")
-      .select("id, type, title, message, read, created_at, user_id, profiles(name, avatar_url)")
+      .select(
+        "id, type, title, message, data, read, created_at, user_id, profiles(name, avatar_url)"
+      )
       .eq("family_id", currentFamily.id)
       .order("created_at", { ascending: false })
       .limit(100);
@@ -113,6 +136,29 @@ export default function AlertsPage() {
     setMarking(false);
   };
 
+  const markRead = async (alert: AlertRow) => {
+    if (alert.read) return;
+    setAlerts((prev) =>
+      prev.map((a) => (a.id === alert.id ? { ...a, read: true } : a))
+    );
+    const { error: err } = await supabase
+      .from("alerts")
+      .update({ read: true })
+      .eq("id", alert.id);
+    if (err) {
+      setAlerts((prev) =>
+        prev.map((a) => (a.id === alert.id ? { ...a, read: false } : a))
+      );
+    }
+  };
+
+  const viewOnMap = (alert: AlertRow) => {
+    if (!alert.user_id) return;
+    void markRead(alert);
+    focusOnMember(alert.user_id);
+    router.push("/app");
+  };
+
   const visible = alerts.filter((a) => {
     if (filter === "unread") return !a.read;
     if (filter === "sos") return a.type === "sos" || a.type === "help";
@@ -163,6 +209,21 @@ export default function AlertsPage() {
           </Card>
         )}
 
+        {/* Honest about anything raised offline that has not reached the family
+            yet — the feed below only shows what the server actually has. */}
+        {pendingEvents > 0 && (
+          <Card className="border-amber-500/30 bg-amber-500/10 p-3">
+            <div className="flex gap-2">
+              <UploadCloud className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-500" />
+              <p className="text-sm text-amber-700 dark:text-amber-400">
+                {pendingEvents} safety {pendingEvents === 1 ? "event" : "events"}{" "}
+                recorded on this device are still waiting to sync. Your family
+                cannot see them yet.
+              </p>
+            </div>
+          </Card>
+        )}
+
         {/* Filters */}
         <div
           className="flex gap-2"
@@ -205,12 +266,18 @@ export default function AlertsPage() {
             {visible.map((alert) => {
               const meta = ALERT_META[alert.type as AlertType];
               const who = alert.profiles?.name;
+              const coords = coordsOf(alert);
+              const isEmergency = alert.type === "sos" || alert.type === "help";
 
               return (
                 <Card
                   key={alert.id}
                   className={`p-4 ${
-                    !alert.read ? "border-primary/40 bg-primary/5" : ""
+                    !alert.read
+                      ? isEmergency
+                        ? "border-destructive/40 bg-destructive/5"
+                        : "border-primary/40 bg-primary/5"
+                      : ""
                   }`}
                 >
                   <div className="flex gap-3">
@@ -222,9 +289,11 @@ export default function AlertsPage() {
                       <div className="flex items-start justify-between gap-2">
                         <h3 className="text-sm font-semibold">{alert.title}</h3>
                         {!alert.read && (
-                          <span
-                            aria-label="Unread"
-                            className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary"
+                          <button
+                            type="button"
+                            onClick={() => void markRead(alert)}
+                            aria-label="Mark as read"
+                            className="mt-1 h-3 w-3 shrink-0 rounded-full bg-primary"
                           />
                         )}
                       </div>
@@ -240,9 +309,51 @@ export default function AlertsPage() {
                           <Clock className="h-3 w-3" />
                           {getTimeAgo(alert.created_at)}
                         </span>
+                        <span>
+                          ·{" "}
+                          {new Date(alert.created_at).toLocaleString([], {
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </span>
                         {meta && <span>· {meta.label}</span>}
                         {who && <span>· {who}</span>}
                       </p>
+
+                      {/* Actions only appear when the data behind them exists. */}
+                      {(coords || alert.user_id) && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {alert.user_id && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 gap-1.5"
+                              onClick={() => viewOnMap(alert)}
+                            >
+                              <MapPin className="h-3.5 w-3.5" />
+                              View on map
+                            </Button>
+                          )}
+                          {coords && (
+                            <a
+                              href={`https://www.google.com/maps/search/?api=1&query=${coords.lat},${coords.lng}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1.5"
+                              >
+                                <Navigation className="h-3.5 w-3.5" />
+                                Navigate
+                              </Button>
+                            </a>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </Card>

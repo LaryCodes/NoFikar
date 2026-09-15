@@ -116,6 +116,18 @@ function buildPeer(
 
   pc.onconnectionstatechange = () => onState(mapConnectionState(pc.connectionState));
 
+  // A transient network change shows as `disconnected` and often recovers on its
+  // own; an ICE restart is only worth attempting once it has genuinely failed.
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === "failed") {
+      try {
+        pc.restartIce();
+      } catch {
+        // Not supported on older Safari — the state change already told the UI.
+      }
+    }
+  };
+
   const addCandidate = async (candidate: RTCIceCandidateInit) => {
     // A candidate can arrive before the remote description is set; applying it
     // then throws, so buffer until the description lands.
@@ -177,6 +189,13 @@ export function openSenderLink(
   const { pc, send, addCandidate, flushCandidates } = buildPeer(channel, onState);
 
   stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+  // If the hardware disappears mid-session (device unplugged, OS revokes the
+  // permission, another app seizes the camera) the peer is useless — surface it
+  // instead of leaving a frozen frame on the requester's screen.
+  for (const track of stream.getTracks()) {
+    track.addEventListener("ended", () => onState("failed"));
+  }
 
   let offering = false;
   const sendOffer = async () => {
@@ -246,6 +265,12 @@ export function openReceiverLink(
   // an offer that carries video and/or audio.
   pc.ontrack = (event) => {
     if (event.streams[0]) onStream(event.streams[0]);
+  };
+
+  // The sender ending the session tears down its tracks; reflect that promptly
+  // rather than holding a stalled element.
+  pc.onsignalingstatechange = () => {
+    if (pc.signalingState === "closed") onState("closed");
   };
 
   channel.on("broadcast", { event: SIGNAL_EVENT }, async ({ payload }) => {

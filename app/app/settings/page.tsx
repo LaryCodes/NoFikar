@@ -52,8 +52,11 @@ export default function SettingsPage() {
   const {
     sharing,
     starting,
+    statusLabel,
+    pendingLocations,
     stop: stopSharing,
     start: startSharing,
+    prepareSignOut,
   } = useLocationSharing();
 
   const [mounted, setMounted] = useState(false);
@@ -71,6 +74,7 @@ export default function SettingsPage() {
   });
   const [savingPref, setSavingPref] = useState<string | null>(null);
   const [togglingSharing, setTogglingSharing] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
 
   // next-themes resolves on the client only; rendering the active state before
   // mount causes a hydration mismatch.
@@ -163,12 +167,20 @@ export default function SettingsPage() {
   };
 
   const handleSignOut = async () => {
-    // Stop the GPS watch and clear the stored flag first, otherwise the family
-    // would keep seeing this account as sharing after it signed out.
-    if (sharing) await stopSharing();
-    await signOut();
-    reset();
-    router.push("/login");
+    setSigningOut(true);
+    try {
+      // Stops the watch, clears the stored sharing flag, flushes anything still
+      // queued, then drops the local queue. Without the flush, points recorded
+      // offline would be stranded: location_history INSERT requires
+      // auth.uid() = user_id, so the next account on this device could never
+      // sync them.
+      await prepareSignOut();
+      await signOut();
+      reset();
+      router.push("/login");
+    } finally {
+      setSigningOut(false);
+    }
   };
 
   const displayName = user?.name || user?.email?.split("@")[0] || "You";
@@ -289,9 +301,16 @@ export default function SettingsPage() {
               </Label>
               <p className="mt-0.5 text-sm text-muted-foreground">
                 {sharing
-                  ? "Live location sharing is on. Your family can see where you are."
+                  ? `${statusLabel}. Positions are recorded on this device first, so a dropped connection does not lose them.`
                   : "Off — your family cannot see where you are. Turning this on starts a live GPS session on this device."}
               </p>
+              {pendingLocations > 0 && (
+                <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-500">
+                  {pendingLocations} recorded{" "}
+                  {pendingLocations === 1 ? "position" : "positions"} waiting to
+                  sync
+                </p>
+              )}
             </div>
             <div className="flex h-6 shrink-0 items-center">
               {togglingSharing || starting ? (
@@ -431,9 +450,14 @@ export default function SettingsPage() {
         className="w-full gap-2"
         size="lg"
         onClick={handleSignOut}
+        disabled={signingOut}
       >
-        <LogOut className="h-5 w-5" />
-        Sign out
+        {signingOut ? (
+          <Loader2 className="h-5 w-5 animate-spin" />
+        ) : (
+          <LogOut className="h-5 w-5" />
+        )}
+        {signingOut ? "Syncing and signing out..." : "Sign out"}
       </Button>
 
       <div className="h-4" />

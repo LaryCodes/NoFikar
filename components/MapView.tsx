@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { Presence } from "@/lib/presence";
+import type { RouteSegment } from "@/lib/routes";
 
 export interface MapMember {
   user_id: string;
@@ -32,8 +33,13 @@ export interface MapZone {
 export interface MapViewProps {
   members?: MapMember[];
   zones?: MapZone[];
-  /** Movement history for the focused user, oldest -> newest. */
-  trail?: Array<{ lat: number; lng: number }>;
+  /**
+   * Recorded path, split into runs. Offline-captured runs are drawn distinctly
+   * so a recovered route is visibly different from a live one.
+   */
+  segments?: RouteSegment[];
+  /** Marker for the route-playback scrubber. */
+  playbackPosition?: { lat: number; lng: number } | null;
   /** Tap-to-place mode, used by the safe-zone location picker. */
   pickerMode?: boolean;
   pickerPosition?: { lat: number; lng: number } | null;
@@ -118,7 +124,8 @@ function memberIcon(m: MapMember, selected: boolean) {
 export default function MapView({
   members = [],
   zones = [],
-  trail = [],
+  segments = [],
+  playbackPosition = null,
   pickerMode = false,
   pickerPosition = null,
   pickerRadius = 200,
@@ -136,7 +143,8 @@ export default function MapView({
   const accuracyRef = useRef<Map<string, L.Circle>>(new Map());
   const zonesRef = useRef<Map<string, L.Circle>>(new Map());
   const zoneLabelsRef = useRef<Map<string, L.Marker>>(new Map());
-  const trailRef = useRef<L.Polyline | null>(null);
+  const segmentsRef = useRef<L.Polyline[]>([]);
+  const playbackRef = useRef<L.Marker | null>(null);
   const pickerRef = useRef<{ marker: L.Marker; circle: L.Circle } | null>(null);
 
   // Only auto-fit once; afterwards respect the user's pan/zoom.
@@ -192,7 +200,8 @@ export default function MapView({
       accuracy.clear();
       zoneCircles.clear();
       zoneLabels.clear();
-      trailRef.current = null;
+      segmentsRef.current = [];
+      playbackRef.current = null;
       pickerRef.current = null;
       didFitRef.current = false;
     };
@@ -425,7 +434,15 @@ export default function MapView({
   // ---- one-shot focus (e.g. from an SOS "View location") ----------------
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !focusUserId || lastFocusRef.current === focusUserId) return;
+    if (!map) return;
+
+    // Clearing the prop re-arms the effect, so asking to focus the SAME member
+    // a second time still recentres instead of being swallowed as a no-op.
+    if (!focusUserId) {
+      lastFocusRef.current = null;
+      return;
+    }
+    if (lastFocusRef.current === focusUserId) return;
 
     const target = members.find((m) => m.user_id === focusUserId);
     if (!target) return;
@@ -435,29 +452,75 @@ export default function MapView({
     map.setView([target.latitude, target.longitude], 16, { animate: true });
   }, [focusUserId, members]);
 
-  // ---- movement history -------------------------------------------------
+  // ---- recorded route ---------------------------------------------------
+  // Polylines are rebuilt wholesale rather than diffed: a route changes as one
+  // unit when the range or member changes, and the vertex count is already
+  // capped upstream by simplifyPath().
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    if (trail.length < 2) {
-      trailRef.current?.remove();
-      trailRef.current = null;
+    for (const line of segmentsRef.current) line.remove();
+    segmentsRef.current = [];
+
+    for (const segment of segments) {
+      if (segment.points.length < 2) continue;
+
+      const line = L.polyline(
+        segment.points.map((p) => [p.lat, p.lng] as [number, number]),
+        segment.offline
+          ? {
+              // Amber and dashed: recorded with no connection, synced later.
+              color: "#f2994a",
+              weight: 4,
+              opacity: 0.85,
+              dashArray: "8 6",
+            }
+          : { color: "#3d9970", weight: 4, opacity: 0.7 }
+      ).addTo(map);
+
+      if (segment.offline) {
+        line.bindPopup(
+          '<strong>Offline route</strong><br/><span style="font-size:12px;opacity:.8">Recorded on the device with no connection, then synced.</span>'
+        );
+      }
+
+      segmentsRef.current.push(line);
+    }
+  }, [segments]);
+
+  // ---- route playback marker --------------------------------------------
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (!playbackPosition) {
+      playbackRef.current?.remove();
+      playbackRef.current = null;
       return;
     }
 
-    const pts = trail.map((p) => [p.lat, p.lng] as [number, number]);
-    if (trailRef.current) {
-      trailRef.current.setLatLngs(pts);
+    const latlng: L.LatLngExpression = [playbackPosition.lat, playbackPosition.lng];
+
+    if (playbackRef.current) {
+      playbackRef.current.setLatLng(latlng);
     } else {
-      trailRef.current = L.polyline(pts, {
-        color: "#3d9970",
-        weight: 3,
-        opacity: 0.65,
-        dashArray: "4 6",
+      playbackRef.current = L.marker(latlng, {
+        interactive: false,
+        zIndexOffset: 1000,
+        icon: L.divIcon({
+          className: "nofikar-marker",
+          html: `<div style="
+            width:18px;height:18px;background:#2f80ed;border:3px solid #fff;
+            border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.4)"></div>`,
+          iconSize: [18, 18],
+          iconAnchor: [9, 9],
+        }),
       }).addTo(map);
     }
-  }, [trail]);
+
+    map.panTo(latlng, { animate: true, duration: 0.3 });
+  }, [playbackPosition]);
 
   const recenter = useCallback(() => {
     const map = mapRef.current;
